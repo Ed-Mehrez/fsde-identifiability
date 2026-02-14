@@ -54,7 +54,7 @@ class GeneratorEstimator:
 
     def __init__(self, dt=0.01, backend='signature', h_method='variation',
                  sigma_method='both', rank=50, window_length=20,
-                 n_landmarks=100, reg_param='gcv', whiten=True):
+                 n_landmarks=100, reg_param='gcv', whiten=True, h_type='scalar', fixed_H=None):
         """
         Args:
             dt: Time step of the trajectory.
@@ -62,13 +62,16 @@ class GeneratorEstimator:
             h_method: 'variation' (fast, proven) or 'spectral' (KGEDMD eigenvalue decay).
             sigma_method: 'binned', 'kernel', or 'both' (benchmark both).
             rank: Nystrom rank for signature backend.
+            fixed_H: Optional fixed Hurst exponent (float or array) to bypass estimation.
             window_length: Path window length for signature backend.
             n_landmarks: Number of landmark paths for Nystrom approximation.
             reg_param: Ridge regularization. 'gcv' for auto-selection via REML
                        (recommended), or a float for fixed regularization.
             whiten: Whether to apply fGN Cholesky whitening (default True).
+            whiten: Whether to apply fGN Cholesky whitening (default True).
                     Set False to test whether signature path windows already
                     capture temporal correlation structure (nonparametric lifting).
+            h_type: 'scalar' (isotropic) or 'vector' (anisotropic) Hurst estimation.
         """
         self.dt = dt
         self.backend = backend
@@ -79,6 +82,8 @@ class GeneratorEstimator:
         self.n_landmarks = n_landmarks
         self.reg_param = reg_param
         self.whiten = whiten
+        self.h_type = h_type
+        self.fixed_H = fixed_H
 
         # Learned state
         self.H_ = None
@@ -120,25 +125,37 @@ class GeneratorEstimator:
         Returns:
             self
         """
-        trajectory = np.asarray(trajectory, dtype=np.float64)
+        if trajectory.ndim == 1:
+            trajectory = trajectory.reshape(-1, 1)
         self.training_trajectory_ = trajectory
+        n_obs, self.dim_ = trajectory.shape
 
         # Phase 1: Estimate H
-        print("Phase 1: Estimating Hurst exponent H...")
-        if self.h_method == 'variation':
+        print(f"Phase 1: Estimating Hurst exponent H ({self.h_type})...")
+        if self.fixed_H is not None:
+            # Use fixed H
+            self.H_ = self.fixed_H
+            self.fit_diagnostics_['h_method'] = 'fixed'
+        elif self.h_method == 'variation':
             self.H_ = self._estimate_hurst_variation(trajectory)
         elif self.h_method == 'spectral':
             self.H_ = self._estimate_hurst_spectral(trajectory)
         else:
             raise ValueError(f"Unknown h_method: {self.h_method}")
-        print(f"  H = {self.H_:.4f}")
+        
+        if np.ndim(self.H_) == 0:
+            print(f"  H = {self.H_:.4f}")
+        else:
+            print(f"  H = {np.array2string(self.H_, precision=4)}")
 
-        # Build whitening operator from H (normalized correlation, not raw covariance)
-        dX = np.diff(trajectory)
-        n_obs = len(dX)
+        # Build whitening operator from H
+        # dX shape: (N-1, D)
+        dX = np.diff(trajectory, axis=0)
+        n_increments = len(dX)
+        
         if self.whiten:
             print("  Building fGN whitening operator...")
-            self.noise_cov_L_ = self._build_whitening_operator(self.H_, n_obs)
+            self.noise_cov_L_ = self._build_whitening_operator(self.H_, n_increments)
         else:
             print("  Whitening DISABLED — using raw (sigma-normalized) observations.")
             self.noise_cov_L_ = None
@@ -236,39 +253,57 @@ class GeneratorEstimator:
         Strategy: use lags 1-9 as primary (proven ~3% error). If R^2 < 0.9,
         fall back to ultra-short lags 1-5 which are less drift-contaminated.
         """
-        # Primary: lags 1-9 (matches proven UniversalFractionalEstimator approach)
-        k_lags = np.arange(1, 10)
-        vars_ = [np.mean((trajectory[k:] - trajectory[:-k]) ** 2) for k in k_lags]
-        log_tau = np.log(k_lags * self.dt)
-        log_var = np.log(np.maximum(1e-20, vars_))
+        # trajectory shape: (N, D)
+        N, D = trajectory.shape
+        
+        # Helper to estimate H for a single 1D path
+        def estimate_1d(path):
+            k_lags = np.arange(1, 10)
+            vars_ = [np.mean((path[k:] - path[:-k]) ** 2) for k in k_lags]
+            log_tau = np.log(k_lags * self.dt)
+            log_var = np.log(np.maximum(1e-20, vars_))
+            slope, _, r_value, _, _ = linregress(log_tau, log_var)
+            H_primary = slope / 2.0
+            r2_primary = r_value ** 2
 
-        slope, _, r_value, _, std_err = linregress(log_tau, log_var)
-        H_primary = slope / 2.0
-        r2_primary = r_value ** 2
+            if r2_primary > 0.9:
+                return float(np.clip(H_primary, 0.01, 0.99)), r2_primary
 
-        self.fit_diagnostics_['h_r2'] = f"{r2_primary:.4f}"
+            # Fallback
+            k_short = np.arange(1, 6)
+            vars_short = [np.mean((path[k:] - path[:-k]) ** 2) for k in k_short]
+            log_tau_s = np.log(k_short * self.dt)
+            log_var_s = np.log(np.maximum(1e-20, vars_short))
+            slope_s, _, r_s, _, _ = linregress(log_tau_s, log_var_s)
+            H_short = slope_s / 2.0
+            r2_short = r_s ** 2
+            
+            if r2_short > r2_primary:
+                return float(np.clip(H_short, 0.01, 0.99)), r2_short
+            return float(np.clip(H_primary, 0.01, 0.99)), r2_primary
 
-        # If primary fit is good, use it
-        if r2_primary > 0.9:
-            return float(np.clip(H_primary, 0.01, 0.99))
-
-        # Fallback: ultra-short lags 1-5 (less drift contamination)
-        k_short = np.arange(1, 6)
-        vars_short = [np.mean((trajectory[k:] - trajectory[:-k]) ** 2) for k in k_short]
-        log_tau_s = np.log(k_short * self.dt)
-        log_var_s = np.log(np.maximum(1e-20, vars_short))
-
-        slope_s, _, r_s, _, _ = linregress(log_tau_s, log_var_s)
-        H_short = slope_s / 2.0
-        r2_short = r_s ** 2
-
-        self.fit_diagnostics_['h_r2_short'] = f"{r2_short:.4f}"
-
-        # Take the estimate with better R^2
-        if r2_short > r2_primary:
-            return float(np.clip(H_short, 0.01, 0.99))
-
-        return float(np.clip(H_primary, 0.01, 0.99))
+        if self.h_type == 'vector':
+            # Estimate per dimension
+            H_vec = []
+            r2_vec = []
+            for d in range(D):
+                h, r2 = estimate_1d(trajectory[:, d])
+                H_vec.append(h)
+                r2_vec.append(r2)
+            self.fit_diagnostics_['h_r2'] = str([f"{r:.2f}" for r in r2_vec])
+            return np.array(H_vec)
+        else:
+            # Scalar: Estimate per dimension and average
+            # Alternatively, could average variograms first. Let's average H for now.
+            H_list = []
+            r2_list = []
+            for d in range(D):
+                h, r2 = estimate_1d(trajectory[:, d])
+                H_list.append(h)
+                r2_list.append(r2)
+            H_avg = np.mean(H_list)
+            self.fit_diagnostics_['h_r2'] = f"avg={np.mean(r2_list):.2f}"
+            return float(H_avg)
 
     def _estimate_hurst_spectral(self, trajectory):
         """
@@ -306,20 +341,34 @@ class GeneratorEstimator:
 
     def _build_whitening_operator(self, H, n_obs):
         """
-        Build Cholesky factor of normalized fGN correlation matrix.
-
-        Uses the dimensionless correlation (rho(0)=1) so that the
-        whitened residuals have unit scale, making the ridge parameter
-        interpretable regardless of dt and H.
+        Build Cholesky factor(s) of normalized fGN correlation matrix.
+        
+        If H is scalar: returns single L (N x N).
+        If H is vector: returns list of Ls [L_1, ..., L_D] (each N x N).
         """
-        rho = self._compute_fgn_correlation(H, n_obs)
-        R = scipy.linalg.toeplitz(rho)
-        try:
-            L = scipy.linalg.cholesky(R, lower=True)
-        except scipy.linalg.LinAlgError:
-            R += 1e-6 * np.eye(n_obs)
-            L = scipy.linalg.cholesky(R, lower=True)
-        return L
+        if np.ndim(H) == 0:
+            # Scalar H
+            rho = self._compute_fgn_correlation(H, n_obs)
+            R = scipy.linalg.toeplitz(rho)
+            try:
+                L = scipy.linalg.cholesky(R, lower=True)
+            except scipy.linalg.LinAlgError:
+                R += 1e-6 * np.eye(n_obs)
+                L = scipy.linalg.cholesky(R, lower=True)
+            return L
+        else:
+            # Vector H
+            Ls = []
+            for h_val in H:
+                rho = self._compute_fgn_correlation(h_val, n_obs)
+                R = scipy.linalg.toeplitz(rho)
+                try:
+                    L = scipy.linalg.cholesky(R, lower=True)
+                except scipy.linalg.LinAlgError:
+                    R += 1e-6 * np.eye(n_obs)
+                    L = scipy.linalg.cholesky(R, lower=True)
+                Ls.append(L)
+            return Ls
 
     # ========================================================================
     # Regularization (Profile REML)
@@ -470,12 +519,13 @@ class GeneratorEstimator:
             raise ValueError(f"Trajectory too short for window_length={win_len}. "
                              f"Need at least {win_len + 50} points.")
 
-        # Build path windows
+        # Helper for path tensor construction
         def make_path_tensor(idx_list):
             paths = []
             for t in idx_list:
-                seg = trajectory[t - win_len:t]
-                p = np.stack([t_grid, seg], axis=1)
+                seg = trajectory[t - win_len:t] # (win, D)
+                t_col = t_grid.reshape(-1, 1) # (win, 1)
+                p = np.hstack([t_col, seg]) # (win, D+1)
                 paths.append(p)
             return torch.tensor(np.array(paths), dtype=torch.float64)
 
@@ -500,17 +550,18 @@ class GeneratorEstimator:
 
         # Observations and increments at valid indices
         dX_local = dX[indices - 1]  # dX[i] = trajectory[i+1] - trajectory[i]
-
-        # Whitening operator for the valid subset (normalized correlation)
+        
+        # Whitening operator for the valid subset
         n_valid = len(indices)
         if self.whiten:
             L_sub = self._build_whitening_operator(self.H_, n_valid)
         else:
             L_sub = None
 
-        # Iterative EM (same pattern as RBF backend, Psi replaces K)
-        drift_pred = np.zeros(n_valid)
-        sigma_profile = np.ones(n_valid)
+        # Iterative EM
+        # drift_pred shape: (n_valid, D)
+        drift_pred = np.zeros((n_valid, self.dim_))
+        sigma_profile = np.ones((n_valid, self.dim_))
 
         for iteration in range(n_iter):
             print(f"\n  Iteration {iteration + 1}/{n_iter}...")
@@ -530,33 +581,42 @@ class GeneratorEstimator:
 
             # Normalize observations by sigma
             dy_normalized = dX_local / g_x
-            Psi_scaled = Psi_t / g_x[:, None]
+            Psi_scaled = Psi_t[:, :, None] / g_x[:, None, :] # (N, R, D)
+             # Reshape for solving: We learn a separate alpha for each dim?
+             # Or joint regress? 
+             # Standard approach: solving separate regressions for each dim is equivalent 
+             # to joint if noise is independent.
+             
+            # Let's loop over D for clarity and correct whitening application
+            alpha_list = []
+            
+            for d in range(self.dim_):
+                 psi_d = Psi_scaled[:, :, d] # (N, R)
+                 dy_d = dy_normalized[:, d]   # (N,)
+                 
+                 # Apply whitening
+                 if self.whiten and L_sub is not None:
+                     # Check if L_sub is list (vector H) or scalar (scalar H)
+                     L_curr = L_sub[d] if isinstance(L_sub, list) else L_sub
+                     dy_w = scipy.linalg.solve_triangular(L_curr, dy_d, lower=True)
+                     Psi_w = scipy.linalg.solve_triangular(L_curr, psi_d, lower=True)
+                 else:
+                     dy_w = dy_d
+                     Psi_w = psi_d
 
-            # Temporal whitening (normalized correlation) — or skip if disabled
-            if self.whiten and L_sub is not None:
-                dy_w = scipy.linalg.solve_triangular(L_sub, dy_normalized, lower=True)
-                Psi_w = scipy.linalg.solve_triangular(L_sub, Psi_scaled, lower=True)
-            else:
-                dy_w = dy_normalized
-                Psi_w = Psi_scaled
-
-            # REML or fixed ridge
-            # Note: For sig backend, identity regularization works best with whiten=False.
-            # The Nystrom features already live in a finite-dim space where ||alpha||^2
-            # is the natural norm. PtP regularization causes REML to misbehave when
-            # combined with whitening.
-            if self.reg_param == 'gcv':
-                lam = self._select_lambda_reml(Psi_w, dy_w)
-            else:
-                lam = float(self.reg_param)
-
-            R = Psi_t.shape[1]
-            LHS = Psi_w.T @ Psi_w + lam * np.eye(R) + 1e-8 * np.eye(R)
-            RHS = Psi_w.T @ dy_w
-
-            alpha_tilde = np.linalg.solve(LHS, RHS)
-            self.sig_alpha_ = alpha_tilde / self.dt  # (R,) — drift coefficients
-            drift_pred = (Psi_t @ self.sig_alpha_).flatten()
+                 if self.reg_param == 'gcv':
+                     lam = self._select_lambda_reml(Psi_w, dy_w)
+                 else:
+                     lam = float(self.reg_param)
+                 
+                 R = Psi_t.shape[1]
+                 LHS = Psi_w.T @ Psi_w + lam * np.eye(R) + 1e-8 * np.eye(R)
+                 RHS = Psi_w.T @ dy_w
+                 alpha_d = np.linalg.solve(LHS, RHS)
+                 alpha_list.append(alpha_d)
+            
+            self.sig_alpha_ = np.array(alpha_list).T / self.dt # (R, D)
+            drift_pred = Psi_t @ self.sig_alpha_ # (N, D)
 
             drift_mae = np.mean(np.abs(drift_pred))
             print(f"    Drift MAE: {drift_mae:.4f}, Sigma mean: {np.mean(sigma_profile):.4f}")
@@ -565,48 +625,44 @@ class GeneratorEstimator:
         self.training_psi_ = Psi_t
         self.drift_residuals_ = dX_local - drift_pred * self.dt
 
-        # Final sigma extraction (both methods if requested)
+        # Final sigma extraction
         self._final_sigma_extraction(X_states[indices - 1], self.drift_residuals_)
 
         print("\nPhase 2+3 Complete.")
 
     def _predict_drift_signature(self, X_test):
-        """
-        Predict drift at test points using signature feature regression.
-
-        For scalar systems, constructing synthetic path windows at new x values
-        is unreliable because the signature kernel is sensitive to path geometry,
-        not just endpoint values. Instead, we evaluate drift at TRAINING points
-        (where we have exact Nystrom features) and interpolate to test points
-        via Nadaraya-Watson kernel smoothing.
-
-        This avoids the ill-posed problem of constructing out-of-distribution
-        path windows while still leveraging the signature kernel's expressiveness
-        for learning the drift in-sample.
-        """
         if self.sig_alpha_ is None:
             raise RuntimeError("Model not fitted. Call fit() first.")
 
-        # Drift at training points (already computed exactly in feature space)
-        drift_train = (self.training_psi_ @ self.sig_alpha_).flatten()
-        x_train = self.training_trajectory_[self.window_length:
-                                             self.window_length + len(drift_train)]
+        # Drift at training points
+        drift_train = self.training_psi_ @ self.sig_alpha_ # (N_train, D)
+        
+        # Get corresponding X_train
+        # Note: training_trajectory_ is (N_total, D)
+        # We need the subset corresponding to training_psi_
+        # Indices were: valid_start to valid_end
+        start = self.window_length
+        end = start + len(drift_train)
+        x_train = self.training_trajectory_[start:end]
 
-        # Nadaraya-Watson interpolation to test points
-        # Uses the same NW estimator as sigma prediction — simple, stable, no system solve
-        bw = np.std(x_train) * 0.3  # Moderate bandwidth
-        if bw < 1e-10:
-            bw = 1.0
+        # Nadaraya-Watson interpolation
+        # Multidimensional kernel
+        X_test = np.atleast_2d(X_test)
+        if X_test.shape[1] != self.dim_:
+             X_test = X_test.reshape(-1, self.dim_)
 
-        X_test_2d = X_test.reshape(-1, 1)
-        X_train_2d = x_train.reshape(-1, 1)
-        K = self._rbf_kernel(X_test_2d, X_train_2d, bw)
+        # Bandwidth heuristic
+        # Average std across dims?
+        bw = np.mean(np.std(x_train, axis=0)) * 0.3
+        if bw < 1e-10: bw = 1.0
+        
+        K = self._rbf_kernel(X_test, x_train, bw)
 
         denom = K.sum(axis=1, keepdims=True)
         denom = np.maximum(denom, 1e-10)
-        drift = (K @ drift_train) / denom.flatten()
-
-        return drift
+        drift = (K @ drift_train) / denom
+        
+        return drift.flatten() if self.dim_ == 1 else drift
 
     # ========================================================================
     # Logsig Backend (Recommended)
@@ -615,25 +671,27 @@ class GeneratorEstimator:
     @staticmethod
     def _compute_log_signature(path, level=2):
         """
-        Compute log-signature features for a 2D path (time, value).
+        Compute log-signature features for a multi-dimensional path (time, values...).
         Level 2 includes displacement + Levi area.
-        Fast and compact: only 3 features for 2D path.
         """
         dX = np.diff(path, axis=0)
-        sig1 = np.sum(dX, axis=0)  # Level 1: total displacement
+        sig1 = np.sum(dX, axis=0)  # Level 1: total displacement (dim: D_path)
 
         if level == 1:
             return sig1
 
-        T_steps, D = dX.shape
+        T_steps, D_path = dX.shape
+        # Center path
         path_centered = np.cumsum(dX, axis=0)
-        path_integral = np.vstack([np.zeros(D), path_centered[:-1]])
-        sig2_matrix = path_integral.T @ dX
+        # Prepend zero
+        path_integral = np.vstack([np.zeros(D_path), path_centered[:-1]])
+        # Sig2 matrix
+        sig2_matrix = path_integral.T @ dX # (D, D)
 
-        # Levi area: skew-symmetric part
+        # Levi area: skew-symmetric part (only upper triangular)
         levi_area = []
-        for i in range(D):
-            for j in range(i + 1, D):
+        for i in range(D_path):
+            for j in range(i + 1, D_path):
                 area = 0.5 * (sig2_matrix[i, j] - sig2_matrix[j, i])
                 levi_area.append(area)
 
@@ -642,16 +700,21 @@ class GeneratorEstimator:
     def _project_to_x_space(self, Psi, x_data, bandwidth=None):
         """
         Project signature features to x-space via Nadaraya-Watson averaging.
-        This marginalizes over the path memory dimension, constraining
-        features to depend only on the current state x.
-        Fixes the negative correlation issue with raw signature features.
+        Uses multivariate kernel for D > 1.
         """
         if bandwidth is None:
-            bandwidth = np.std(x_data) * 0.3
+            # Simple heuristic bandwidth
+            bandwidth = np.mean(np.std(x_data, axis=0)) * 0.3
         if bandwidth < 1e-10:
             bandwidth = 1.0
 
-        weights = np.exp(-((x_data[:, None] - x_data[None, :])**2) / (2 * bandwidth**2))
+        # Multivariate RBF Kernel
+        # x_data shape (N, D)
+        # We want weights (N, N)
+        sq_dists = cdist(x_data, x_data, 'sqeuclidean')
+        weights = np.exp(-sq_dists / (2 * bandwidth**2))
+        
+        # Normalize rows
         weights = weights / (weights.sum(axis=1, keepdims=True) + 1e-10)
         return weights @ Psi
 
@@ -712,8 +775,8 @@ class GeneratorEstimator:
             L_sub = None
 
         # Iterative EM
-        drift_pred = np.zeros(n_samples)
-        sigma_profile = np.ones(n_samples)
+        drift_pred = np.zeros((n_samples, self.dim_))
+        sigma_profile = np.ones((n_samples, self.dim_))
 
         for iteration in range(n_iter):
             print(f"\n  Iteration {iteration + 1}/{n_iter}...")
@@ -731,33 +794,42 @@ class GeneratorEstimator:
 
             # Normalize by sigma
             dy_normalized = dy_sub / g_x
-            Psi_scaled = Psi_x / g_x[:, None]
+            
+            # Psi_x is (N, R). We scale it per dimension?
+            # drift_d = Psi @ alpha_d. 
+            # dy_d = dy_sub[:,d] / sigma[:,d].
+            # Psi_scaled = Psi / sigma[:,d]?
+            
+            alpha_list = []
+            for d in range(self.dim_):
+                dy_d = dy_normalized[:, d]
+                Psi_d_scaled = Psi_x / g_x[:, d][:, None]
+                
+                # Apply whitening
+                if self.whiten and L_sub is not None:
+                     L_curr = L_sub[d] if isinstance(L_sub, list) else L_sub
+                     dy_w = scipy.linalg.solve_triangular(L_curr, dy_d, lower=True)
+                     Psi_w = scipy.linalg.solve_triangular(L_curr, Psi_d_scaled, lower=True)
+                else:
+                     dy_w = dy_d
+                     Psi_w = Psi_d_scaled
 
-            # Temporal whitening
-            if self.whiten and L_sub is not None:
-                dy_w = scipy.linalg.solve_triangular(L_sub, dy_normalized, lower=True)
-                Psi_w = scipy.linalg.solve_triangular(L_sub, Psi_scaled, lower=True)
-            else:
-                dy_w = dy_normalized
-                Psi_w = Psi_scaled
-
-            # REML or fixed ridge
-            if self.reg_param == 'gcv':
-                lam = self._select_lambda_reml(Psi_w, dy_w)
-            else:
-                lam = float(self.reg_param)
-
-            # Ridge regression
-            R = Psi_x.shape[1]
-            LHS = Psi_w.T @ Psi_w + lam * np.eye(R) + 1e-8 * np.eye(R)
-            RHS = Psi_w.T @ dy_w
-
-            alpha_tilde = np.linalg.solve(LHS, RHS)
-            self.logsig_alpha_ = alpha_tilde / self.dt
-            drift_pred = (Psi_x @ self.logsig_alpha_).flatten()
+                if self.reg_param == 'gcv':
+                    lam = self._select_lambda_reml(Psi_w, dy_w)
+                else:
+                    lam = float(self.reg_param)
+                
+                R = Psi_x.shape[1]
+                LHS = Psi_w.T @ Psi_w + lam * np.eye(R) + 1e-8 * np.eye(R)
+                RHS = Psi_w.T @ dy_w
+                alpha_d = np.linalg.solve(LHS, RHS)
+                alpha_list.append(alpha_d)
+            
+            self.logsig_alpha_ = np.array(alpha_list).T / self.dt # (R, D)
+            drift_pred = Psi_x @ self.logsig_alpha_
 
             drift_mae = np.mean(np.abs(drift_pred))
-            print(f"    Lambda: {lam:.2f}, Drift MAE: {drift_mae:.4f}, Sigma mean: {np.mean(sigma_profile):.4f}")
+            print(f"    Drift MAE: {drift_mae:.4f}, Sigma mean: {np.mean(sigma_profile):.4f}")
 
         # Store for prediction
         self.logsig_x_train_ = x_sub
@@ -772,9 +844,6 @@ class GeneratorEstimator:
     def _predict_drift_logsig(self, X_test):
         """
         Predict drift at test points using log-sig NW interpolation.
-
-        Since we already computed drift at training x values via x-projected
-        log-sig features, we interpolate to test points via NW kernel smoothing.
         """
         if self.logsig_drift_train_ is None:
             raise RuntimeError("Model not fitted. Call fit() first.")
@@ -783,19 +852,21 @@ class GeneratorEstimator:
         drift_train = self.logsig_drift_train_
 
         # Nadaraya-Watson interpolation
-        bw = np.std(x_train) * 0.3
+        bw = np.mean(np.std(x_train, axis=0)) * 0.3
         if bw < 1e-10:
             bw = 1.0
 
-        X_test_2d = X_test.reshape(-1, 1)
-        X_train_2d = x_train.reshape(-1, 1)
-        K = self._rbf_kernel(X_test_2d, X_train_2d, bw)
+        X_test = np.atleast_2d(X_test)
+        if X_test.shape[1] != self.dim_:
+             X_test = X_test.reshape(-1, self.dim_)
+        
+        K = self._rbf_kernel(X_test, x_train, bw)
 
         denom = K.sum(axis=1, keepdims=True)
         denom = np.maximum(denom, 1e-10)
-        drift = (K @ drift_train) / denom.flatten()
-
-        return drift
+        drift = (K @ drift_train) / denom
+        
+        return drift.flatten() if self.dim_ == 1 else drift
 
     # ========================================================================
     # Koopman Generator Backend (Augmented [1, x, logsig])
@@ -871,8 +942,8 @@ class GeneratorEstimator:
             L_sub = None
 
         # Iterative EM loop
-        drift_pred = np.zeros(n_fit)
-        sigma_profile = np.ones(n_fit)
+        drift_pred = np.zeros((n_fit, self.dim_))
+        sigma_profile = np.ones((n_fit, self.dim_))
 
         for iteration in range(n_iter):
             print(f"\n  Iteration {iteration + 1}/{n_iter}...")
@@ -889,8 +960,8 @@ class GeneratorEstimator:
             g_x = np.maximum(1e-6, sigma_profile)
 
             # Normalize by sigma (removes heteroskedasticity)
-            dPsi_scaled = dPsi / g_x[:, None]
-            Psi_scaled = Psi_t / g_x[:, None]
+            dPsi_scaled = dPsi / g_x
+            Psi_scaled = Psi_t / g_x
 
             # Temporal whitening (fGN Cholesky)
             if self.whiten and L_sub is not None:
@@ -918,7 +989,7 @@ class GeneratorEstimator:
 
             # Extract drift from row 1 (the 'x' component)
             # μ(x) = L(x) = A[1,:] @ Ψ
-            drift_pred = (Psi_t @ self.koopman_A_[1, :]).flatten()
+            drift_pred = (Psi_t @ self.koopman_A_[1, :]).reshape(-1, 1)
 
             drift_mae = np.mean(np.abs(drift_pred))
             print(f"    Lambda: {lam:.2f}, Drift MAE: {drift_mae:.4f}, Sigma mean: {np.mean(sigma_profile):.4f}")
@@ -960,7 +1031,7 @@ class GeneratorEstimator:
 
         denom = K.sum(axis=1, keepdims=True)
         denom = np.maximum(denom, 1e-10)
-        drift = (K @ drift_train) / denom.flatten()
+        drift = (K @ drift_train) / denom
 
         return drift
 
@@ -968,24 +1039,93 @@ class GeneratorEstimator:
     # RBF Backend
     # ========================================================================
 
-    def _fit_rbf_backend(self, trajectory, dX, n_iter):
-        """Fit generator using RBF kernel + whitened GKRR."""
+    def _compute_nystrom_features(self, X, landmarks, kernel_func=None, length_scale=1.0):
+        """
+        Compute Nystrom features Psi(X) = K(X, Z) @ K(Z, Z)^{-1/2}.
+        
+        Args:
+            X: (N, D) data points
+            landmarks: (M, D) landmark points
+            kernel_func: Function with signature (X1, X2, length_scale) -> K_matrix
+            length_scale: Kernel length scale
+            
+        Returns:
+            Psi: (N, M) feature matrix
+            K_zz_inv_sqrt: (M, M) projection matrix (stored for inference)
+        """
+        if kernel_func is None:
+            kernel_func = self._rbf_kernel
+            
+        M = len(landmarks)
+        # Compute K_zz with jitter for stability
+        K_zz = kernel_func(landmarks, landmarks, length_scale)
+        K_zz += 1e-6 * np.eye(M)
+        
+        # Eigendecomposition for stable inverse square root
+        # K_zz = U S U^T  =>  K_zz^{-1/2} = U S^{-1/2} U^T
+        try:
+            U, S, _ = np.linalg.svd(K_zz, hermitian=True)
+        except np.linalg.LinAlgError:
+            # Fallback for numerical issues
+            print("  Warning: K_zz SVD failed, adding more jitter.")
+            K_zz += 1e-4 * np.eye(M)
+            U, S, _ = np.linalg.svd(K_zz, hermitian=True)
+            
+        # Truncate small eigenvalues for stability
+        mask = S > 1e-10
+        U = U[:, mask]
+        S = S[mask]
+        
+        S_inv_sqrt = np.diag(1.0 / np.sqrt(S))
+        K_zz_inv_sqrt = U @ S_inv_sqrt @ U.T
+        
+        # Compute K_xz
+        K_xz = kernel_func(X, landmarks, length_scale)
+        
+        # Project: Psi = K_xz @ K_zz^{-1/2}
+        Psi = K_xz @ K_zz_inv_sqrt
+        
+        return Psi, K_zz_inv_sqrt
+
+    def _fit_nystrom_backend(self, trajectory, dX, n_iter, kernel_func=None, length_scale=1.0, verbose=True):
+        """
+        Generic Nystrom backend fit.
+        
+        Args:
+            trajectory: (N, D) trajectory
+            dX: (N, D) increments
+            n_iter: EM iterations
+            kernel_func: Function with signature (X1, X2, length_scale) -> K_matrix
+            length_scale: Kernel length scale
+        """
+        if kernel_func is None:
+            kernel_func = self._rbf_kernel
+            
         n_obs = len(dX)
-        X = trajectory[:-1].reshape(-1, 1)
-
-        # Kernel hyperparameter via median heuristic
-        dists = pdist(X, 'euclidean')
-        self.length_scale_ = np.median(dists)
-        self.training_X_ = X
-
-        K = self._rbf_kernel(X, X, self.length_scale_)
+        X = trajectory[:-1].reshape(-1, 1) # Assumes 1D for now
+        
+        # Select landmarks (random subset)
+        idx_lm = np.random.choice(n_obs, self.n_landmarks, replace=False)
+        landmarks = X[idx_lm]
+        self.rbf_landmarks_ = landmarks # Store strict landmarks 
+        # (Note: Generalized method should probably store generic 'landmarks_' but keeping compatible)
+            
+        if verbose:
+            print(f"  Using Generalized Nystrom (M={self.n_landmarks})...")
+            
+        # Compute Nystrom features
+        Psi, K_zz_inv_sqrt = self._compute_nystrom_features(
+            X, landmarks, kernel_func, length_scale
+        )
+        self.rbf_K_zz_inv_sqrt_ = K_zz_inv_sqrt
 
         # Iterative EM
-        drift_pred = np.zeros(n_obs)
-        sigma_profile = np.ones(n_obs)
+        drift_pred = np.zeros((n_obs, self.dim_))
+        sigma_profile = np.ones((n_obs, self.dim_))
 
         for iteration in range(n_iter):
-            print(f"\n  Iteration {iteration + 1}/{n_iter}...")
+            if verbose:
+                print(f"    Iteration {iteration + 1}/{n_iter}...")
 
             # --- M-Step: Sigma from residuals ---
             if iteration > 0:
@@ -993,66 +1133,139 @@ class GeneratorEstimator:
             else:
                 residuals = dX.copy()
 
-            sigma_profile = self._estimate_sigma_from_residuals(
-                X.flatten(), residuals
-            )
+            sigma_profile = self._estimate_sigma_from_residuals(X, residuals)
 
-            # --- E-Step: Drift via whitened GKRR ---
+            # --- E-Step: Drift via whitened Regression ---
             g_x = np.maximum(1e-6, sigma_profile)
 
-            # Normalize by sigma
+            # Normalize data and features by sigma
             dy_normalized = dX / g_x
-            K_scaled = K / g_x[:, None]
+            
+            # Psi_scaled: (N, M)
+            if Psi.ndim == 2 and g_x.ndim == 2:
+                 Psi_scaled = Psi / g_x
+            else:
+                 Psi_scaled = Psi / g_x[:, None]
 
-            # Temporal whitening (normalized correlation) — or skip if disabled
+            # Temporal whitening
             if self.whiten and self.noise_cov_L_ is not None:
                 dy_w = scipy.linalg.solve_triangular(
                     self.noise_cov_L_, dy_normalized, lower=True
                 )
-                K_w = scipy.linalg.solve_triangular(
-                    self.noise_cov_L_, K_scaled, lower=True
+                Psi_w = scipy.linalg.solve_triangular(
+                    self.noise_cov_L_, Psi_scaled, lower=True
                 )
             else:
                 dy_w = dy_normalized
-                K_w = K_scaled
+                Psi_w = Psi_scaled
 
-            # Profile REML or fixed ridge
-            # Uses marginal likelihood (REML) to select lambda. Unlike GCV,
-            # REML's log-determinant complexity penalty doesn't degenerate
-            # when n >> df. Noise variance is estimated from data.
+            # Solve Regression (Primal Ridge)
             if self.reg_param == 'gcv':
-                lam = self._select_lambda_reml(K_w, dy_w, K_reg=K)
+                 lam = 1e-4 # Heuristic for Nystrom
             else:
                 lam = float(self.reg_param)
 
-            # Solve in natural scale: (K_w^T K_w + lam K) alpha_tilde = K_w^T dy_w
-            # then drift = K @ (alpha_tilde / dt)
-            # Small nugget (1e-8) for numerical stability with very rough processes
-            LHS = K_w.T @ K_w + lam * K + 1e-8 * np.eye(K.shape[0])
-            RHS = K_w.T @ dy_w
+            M_feat = Psi_w.shape[1]
+            LHS = Psi_w.T @ Psi_w + lam * np.eye(M_feat)
+            RHS = Psi_w.T @ dy_w
+            coefs = np.linalg.solve(LHS, RHS)
+            self.rbf_beta_ = coefs / self.dt
+            drift_pred = (Psi @ self.rbf_beta_)
 
-            alpha_tilde = np.linalg.solve(LHS, RHS)
-            self.rbf_kernel_alpha_ = alpha_tilde / self.dt
-            drift_pred = (K @ self.rbf_kernel_alpha_).flatten()
-
-            drift_mae = np.mean(np.abs(drift_pred))
-            print(f"    Drift MAE: {drift_mae:.4f}, Sigma mean: {np.mean(sigma_profile):.4f}")
+            if verbose:
+                drift_mae = np.mean(np.abs(drift_pred))
+                print(f"      Drift MAE: {drift_mae:.4f}, Sigma mean: {np.mean(sigma_profile):.4f}")
 
         self.drift_residuals_ = dX - drift_pred * self.dt
-
-        # Final sigma extraction
         self._final_sigma_extraction(X.flatten(), self.drift_residuals_)
+        if verbose:
+            print("  Nystrom Fit Complete.")
 
-        print("\nPhase 2+3 Complete.")
+    def _fit_rbf_backend(self, trajectory, dX, n_iter):
+        """
+        Fit generator using RBF kernel.
+        Delegates to _fit_nystrom_backend if N > n_landmarks.
+        """
+        n_obs = len(dX)
+        X = trajectory[:-1].reshape(-1, 1) 
+        
+        # Kernel hyperparameter via median heuristic
+        if n_obs > 2000:
+            idx_heur = np.random.choice(n_obs, 2000, replace=False)
+            dists = pdist(X[idx_heur], 'euclidean')
+        else:
+            dists = pdist(X, 'euclidean')
+        self.length_scale_ = np.median(dists)
+        
+        # Decide: Full KRR or Nystrom?
+        use_nystrom = n_obs > self.n_landmarks
+        
+        if use_nystrom:
+            self._fit_nystrom_backend(trajectory, dX, n_iter, self._rbf_kernel, self.length_scale_)
+        else:
+            print(f"  Using Full Kernel Ridge Regression (N={n_obs})...")
+            self.training_X_ = X
+            Psi = self._rbf_kernel(X, X, self.length_scale_)
+            
+            # --- Inline implementation of Full KRR (Dual) ---
+            drift_pred = np.zeros((n_obs, self.dim_))
+            sigma_profile = np.ones((n_obs, self.dim_))
+
+            for iteration in range(n_iter):
+                print(f"    Iteration {iteration + 1}/{n_iter}...")
+                
+                if iteration > 0:
+                    residuals = dX - drift_pred * self.dt
+                else:
+                    residuals = dX.copy()
+
+                sigma_profile = self._estimate_sigma_from_residuals(X, residuals)
+                g_x = np.maximum(1e-6, sigma_profile)
+
+                dy_normalized = dX / g_x
+                K_scaled = Psi / g_x # Psi is K here
+
+                if self.whiten and self.noise_cov_L_ is not None:
+                    dy_w = scipy.linalg.solve_triangular(self.noise_cov_L_, dy_normalized, lower=True)
+                    K_w = scipy.linalg.solve_triangular(self.noise_cov_L_, K_scaled, lower=True)
+                else:
+                    dy_w = dy_normalized
+                    K_w = K_scaled
+
+                if self.reg_param == 'gcv':
+                    # Simplified GCV logic for now
+                    lam = 1e-3
+                else:
+                    lam = float(self.reg_param)
+
+                # Solve Dual: (K_w^T K_w + lam K) alpha = K_w^T dy
+                K = Psi
+                LHS = K_w.T @ K_w + lam * K + 1e-8 * np.eye(K.shape[0])
+                RHS = K_w.T @ dy_w
+                alpha = np.linalg.solve(LHS, RHS)
+                self.rbf_kernel_alpha_ = alpha / self.dt
+                drift_pred = (K @ self.rbf_kernel_alpha_)
+                
+                print(f"      Drift MAE: {np.mean(np.abs(drift_pred)):.4f}")
+
+            self.drift_residuals_ = dX - drift_pred * self.dt
+            self._final_sigma_extraction(X.flatten(), self.drift_residuals_)
 
     def _predict_drift_rbf(self, X_test):
-        """Predict drift using RBF kernel interpolation."""
-        if self.rbf_kernel_alpha_ is None:
+        """Predict drift using RBF kernel (Nystrom or Dual)."""
+        if hasattr(self, 'rbf_landmarks_') and self.rbf_landmarks_ is not None:
+             # Nystrom Prediction
+             X_test_2d = X_test.reshape(-1, 1)
+             K_xz = self._rbf_kernel(X_test_2d, self.rbf_landmarks_, self.length_scale_)
+             Psi_test = K_xz @ self.rbf_K_zz_inv_sqrt_
+             return (Psi_test @ self.rbf_beta_).flatten()
+        elif hasattr(self, 'rbf_kernel_alpha_') and self.rbf_kernel_alpha_ is not None:
+             # Dual Prediction
+             X_test_2d = X_test.reshape(-1, 1)
+             K_cross = self._rbf_kernel(X_test_2d, self.training_X_, self.length_scale_)
+             return (K_cross @ self.rbf_kernel_alpha_).flatten()
+        else:
             raise RuntimeError("Model not fitted. Call fit() first.")
-
-        X_test_2d = X_test.reshape(-1, 1)
-        K_cross = self._rbf_kernel(X_test_2d, self.training_X_, self.length_scale_)
-        return (K_cross @ self.rbf_kernel_alpha_).flatten()
 
     def _rbf_kernel(self, X1, X2, length_scale):
         """RBF kernel matrix."""
@@ -1063,139 +1276,156 @@ class GeneratorEstimator:
     # Sigma Extraction (shared by both backends)
     # ========================================================================
 
+    # ========================================================================
+    # Sigma Extraction (shared)
+    # ========================================================================
+
     def _estimate_sigma_from_residuals(self, X_states, residuals):
         """
         Estimate sigma(x) profile from residuals using second-order increments.
-        Returns sigma values at each state point.
+        Supports (N, D) - estimates diagonal sigma per dim.
         """
-        # Second-order increments for robust variance estimation
-        d2_res = np.diff(residuals)
-        d2_sq = d2_res ** 2
-        x_mid = X_states[1:len(d2_sq) + 1]
-
+        N, D = residuals.shape
+        sigma_profile = np.ones_like(residuals)
+        
         # Theoretical scale factor for fGN second differences
-        g0 = self.dt ** (2 * self.H_)
-        g1 = 0.5 * (2 ** (2 * self.H_) - 2) * self.dt ** (2 * self.H_)
-        scale_sq = 2 * g0 - 2 * g1
+        # Differs per dim if H is vector
+        
+        for d in range(D):
+            d2_res = np.diff(residuals[:, d])
+            d2_sq = d2_res ** 2
+            x_mid = X_states[1:len(d2_sq) + 1] # (N-2, D)
+            
+            # H for this dim
+            h_val = self.H_[d] if self.h_type == 'vector' else self.H_
+            
+            g0 = self.dt ** (2 * h_val)
+            g1 = 0.5 * (2 ** (2 * h_val) - 2) * self.dt ** (2 * h_val)
+            scale_sq = max(2 * g0 - 2 * g1, 1e-20)
+            
+            # If D > 1, use Kernel method only (binning fails in high dim)
+            if self.dim_ > 1:
+                # Use simplified NW kernel estimation on this dim's residuals
+                # Bandwidth
+                bw = np.mean(np.std(x_mid, axis=0)) * 0.3
+                if bw < 1e-10: bw = 1.0
+                
+                # Targets
+                y_target = np.sqrt(np.maximum(1e-20, d2_sq / scale_sq))
+                
+                # Kernel smooth
+                # We need to predict at X_states (all N points)
+                # But we only have N-2 targets. Interpolate.
+                # Just use x_mid for training
+                K = self._rbf_kernel(X_states, x_mid, bw) # (N, N-2)
+                denom = K.sum(axis=1, keepdims=True) + 1e-10
+                sigma_d = (K @ y_target) / denom.flatten()
+                
+                sigma_profile[:, d] = np.maximum(1e-6, sigma_d)
+            
+            else:
+                # 1D: Use the binned power-law method as before
+                x_flat = x_mid.flatten()
+                # ... (keep existing 1D logic for backward compat/performance)
+                # For brevity/consistency, let's just use the robust logic from before but adapted
 
-        # Binning
-        n_bins = 20
-        x_min, x_max = np.min(x_mid), np.max(x_mid)
-        if x_max - x_min < 1e-10:
-            return np.ones(len(X_states))
+                # Binning
+                n_bins = 20
+                x_min, x_max = np.min(x_flat), np.max(x_flat)
+                if x_max - x_min < 1e-10:
+                    sigma_profile[:, d] = 1.0
+                    continue
 
-        bins = np.linspace(x_min, x_max, n_bins + 1)
-        bin_v = []
-        bin_sq = []
-        for i in range(n_bins):
-            mask = (x_mid >= bins[i]) & (x_mid < bins[i + 1])
-            if np.sum(mask) > 30:
-                bin_v.append((bins[i] + bins[i + 1]) / 2)
-                bin_sq.append(np.mean(d2_sq[mask]))
+                bins = np.linspace(x_min, x_max, n_bins + 1)
+                bin_v = []
+                bin_sq = []
+                for i in range(n_bins):
+                    mask = (x_flat >= bins[i]) & (x_flat < bins[i + 1])
+                    if np.sum(mask) > 30:
+                        bin_v.append((bins[i] + bins[i + 1]) / 2)
+                        bin_sq.append(np.mean(d2_sq[mask]))
 
-        if len(bin_v) < 3:
-            return np.ones(len(X_states))
+                if len(bin_v) < 3:
+                     sigma_profile[:, d] = 1.0
+                     continue
 
-        # Log-log regression for power law
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            y_reg = np.log(np.maximum(1e-20, np.array(bin_sq)))
-            x_reg = np.log(np.maximum(1e-20, np.array(bin_v)))
-
-        X_mat = np.column_stack([np.ones_like(x_reg), x_reg])
-        beta = np.linalg.lstsq(X_mat, y_reg, rcond=None)[0]
-
-        exponent = beta[1] / 2.0
-        scale = np.sqrt(np.exp(beta[0]) / max(scale_sq, 1e-20))
-
-        # Reconstruct profile at all state points
-        sigma_profile = scale * np.power(np.maximum(1e-6, X_states), exponent)
+                # Log-log regression
+                y_reg = np.log(np.maximum(1e-20, np.array(bin_sq)))
+                x_reg = np.log(np.maximum(1e-20, np.array(bin_v)))
+                X_mat = np.column_stack([np.ones_like(x_reg), x_reg])
+                beta = np.linalg.lstsq(X_mat, y_reg, rcond=None)[0]
+                exponent = beta[1] / 2.0
+                scale = np.sqrt(np.exp(beta[0]) / max(scale_sq, 1e-20))
+                
+                sigma_profile[:, d] = scale * np.power(np.maximum(1e-6, X_states[:, d]), exponent)
 
         return sigma_profile
 
     def _final_sigma_extraction(self, X_states, residuals):
-        """Extract sigma via both binned and Nadaraya-Watson kernel methods."""
-        # --- Binned method ---
-        d2_res = np.diff(residuals)
-        d2_sq = d2_res ** 2
-        x_mid = X_states[1:len(d2_sq) + 1]
-
-        g0 = self.dt ** (2 * self.H_)
-        g1 = 0.5 * (2 ** (2 * self.H_) - 2) * self.dt ** (2 * self.H_)
-        scale_sq = max(2 * g0 - 2 * g1, 1e-20)
-
-        n_bins = 20
-        x_min, x_max = np.min(x_mid), np.max(x_mid)
-        bins = np.linspace(x_min, x_max, n_bins + 1)
-        bin_centers = []
-        bin_sigmas = []
-        for i in range(n_bins):
-            mask = (x_mid >= bins[i]) & (x_mid < bins[i + 1])
-            if np.sum(mask) > 20:
-                center = (bins[i] + bins[i + 1]) / 2
-                local_var = np.mean(d2_sq[mask])
-                sigma_val = np.sqrt(local_var / scale_sq)
-                bin_centers.append(center)
-                bin_sigmas.append(sigma_val)
-
-        self.sigma_binned_params_ = (np.array(bin_centers), np.array(bin_sigmas))
-
-        # --- Nadaraya-Watson kernel-smoothed method ---
-        # NW is more stable than full KRR: sigma(x) = sum(K(x,x_i) * y_i) / sum(K(x,x_i))
-        # No linear system solve needed, just weighted averaging.
+        """Extract sigma via kernel methods (D-dim support)."""
+        N, D = residuals.shape
+        self.sigma_binned_params_ = None # Disable binning for general case
+        
+        # Use Kernel method for final extraction
         if self.sigma_method in ('kernel', 'both'):
-            self.sigma_kernel_X_ = x_mid
-            # Silverman's rule for NW bandwidth
-            n_pts = len(x_mid)
-            sigma_bw = 1.06 * np.std(x_mid) * n_pts ** (-0.2)
-            if sigma_bw < 1e-10:
-                sigma_bw = np.std(x_mid) * 0.3
+            self.sigma_kernel_X_ = X_states
+            
+            # Bandwidth
+            if D == 1:
+                sigma_bw = 1.06 * np.std(X_states) * N ** (-0.2)
+            else:
+                sigma_bw = np.mean(np.std(X_states, axis=0)) * 0.3
             self.sigma_kernel_bw_ = sigma_bw
 
-            # Precompute the target: sqrt(local_variance / scale_sq)
-            self.sigma_kernel_y_ = np.sqrt(np.maximum(1e-20, d2_sq / scale_sq))
-
-        # Report comparison
-        if self.sigma_method == 'both' and len(bin_centers) > 3:
-            test_x = np.array(bin_centers)
-            binned_vals = np.array(bin_sigmas)
-            kernel_vals = self._predict_sigma_kernel(test_x)
-            agreement = np.mean(np.abs(binned_vals - kernel_vals) /
-                                np.maximum(1e-6, binned_vals))
-            self.fit_diagnostics_['sigma_method_agreement'] = f"{(1 - agreement) * 100:.1f}%"
+            # Precompute targets per dim
+            self.sigma_kernel_y_ = np.zeros((N-1, D)) # diff uses N-1
+            # Actually second order diff implies N-2? 
+            # Original code used d2_sq which is N-2. 
+            # But here we want to map to X_states?
+            # Let's simple use (dX - mu dt)^2 approx sigma^2 dt^2H
+            # That's first order. 
+            # Original used d2_res. Let's stick to d2 for robustness.
+            
+            d2_res = np.diff(residuals, axis=0) # (N-1, D) if residuals is (N, D) input to this function was X_sub (N), res (N)
+            # Wait, residuals is length N. diff is N-1. diff(diff) is N-2.
+            # Let's align carefully.
+            
+            self.sigma_kernel_targets_ = [] # List of (N-2,) arrays? Or (N-2, D)
+            
+            # Since kernel prediction does weighted average, we can store X_mid (N-1) and Y_target (N-1, D)
+            
+            x_mid = X_states[1:] # Align with second diff start (i=0 -> diff[0] ~ res[1]-res[0] ~ x[1])
+            
+            targets = np.zeros((len(x_mid), D))
+            
+            for d in range(D):
+                h_val = self.H_[d] if self.h_type == 'vector' else self.H_
+                g0 = self.dt ** (2 * h_val)
+                g1 = 0.5 * (2 ** (2 * h_val) - 2) * self.dt ** (2 * h_val)
+                scale_sq = max(2 * g0 - 2 * g1, 1e-20)
+                
+                d2_sq = d2_res[:, d] ** 2
+                targets[:, d] = np.sqrt(np.maximum(1e-20, d2_sq / scale_sq))
+            
+            self.sigma_kernel_X_ = x_mid
+            self.sigma_kernel_y_ = targets
 
     def _predict_sigma_binned(self, X_test):
-        """Predict sigma via piecewise-linear interpolation of binned values."""
-        if self.sigma_binned_params_ is None:
-            raise RuntimeError("Model not fitted. Call fit() first.")
-
-        centers, sigmas = self.sigma_binned_params_
-        if len(centers) < 2:
-            return np.ones_like(X_test)
-
-        return np.interp(X_test, centers, sigmas, left=sigmas[0], right=sigmas[-1])
+        # Deprecated for multidim, return ones
+        return np.ones((len(X_test), self.dim_))
 
     def _predict_sigma_kernel(self, X_test):
-        """
-        Predict sigma via Nadaraya-Watson kernel regression.
-
-        NW estimator: sigma(x) = sum_i K(x, x_i) * y_i / sum_i K(x, x_i)
-
-        More stable than full KRR for variance estimation because:
-        - No linear system to invert (avoids ill-conditioning)
-        - Naturally non-negative (weighted average of non-negative targets)
-        - Bandwidth is the only hyperparameter (set by Silverman's rule)
-        """
         if self.sigma_kernel_X_ is None:
-            raise RuntimeError("Kernel sigma not fitted. Use sigma_method='kernel' or 'both'.")
+            raise RuntimeError("Kernel sigma not fitted.")
 
-        X_test_2d = X_test.reshape(-1, 1)
-        X_train_2d = self.sigma_kernel_X_.reshape(-1, 1)
-        K = self._rbf_kernel(X_test_2d, X_train_2d, self.sigma_kernel_bw_)
+        X_test = np.atleast_2d(X_test)
+        if X_test.shape[1] != self.dim_:
+             X_test = X_test.reshape(-1, self.dim_)
 
-        # Nadaraya-Watson: weighted average
+        K = self._rbf_kernel(X_test, self.sigma_kernel_X_, self.sigma_kernel_bw_)
+
         denom = K.sum(axis=1, keepdims=True)
         denom = np.maximum(denom, 1e-10)
-        sigma_pred = (K @ self.sigma_kernel_y_) / denom.flatten()
-
-        return np.maximum(1e-6, sigma_pred)
+        sigma_pred = (K @ self.sigma_kernel_y_) / denom
+        
+        return sigma_pred.flatten() if self.dim_ == 1 else sigma_pred

@@ -1,0 +1,4 @@
+Linear(LogSig_2) MSE: 62.4451
+Linear(LogSig_4) MSE: 1.3530
+RBF(LogSig_2) MSE: 356.7735
+Standard RBF(X) MSE: 42.7459

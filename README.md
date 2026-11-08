@@ -1,136 +1,84 @@
 # Fractional SDE Identifiability
 
-Nonparametric estimation of fractional stochastic differential equation parameters.
+Nonparametric estimation of the Hurst exponent H, diffusion σ(x) and drift μ(x) of
 
-## The Problem
+$$dX_t = \mu(X_t)\,dt + \sigma(X_t)\,dB^H_t$$
 
-Given trajectory data from a fractional SDE:
+from discretely sampled paths.
 
-$$dX_t = \mu(X_t) dt + \sigma(X_t) dB^H_t$$
+> **Status (November 2026).** The `fsde/` package is an audited rebuild (Phase 0).
+>
+> The legacy `src/` code and the earlier claims in this README did not hold up:
+> - Stroock–Varadhan "unique identifiability" does not apply to this non-Markov process.
+> - The Koopman eigenvalue "amplitude constraint" was never implemented and is invalid for H ≠ 1/2.
+> - σ error was 22–40%, not under 3%.
+> - The benchmarks simulated H = 0.5.
+>
+> See [`docs/phase0.md`](docs/phase0.md) for the full list. `src/` is kept for reference only.
 
-Estimate the **functions** μ(x), σ(x) and **scalar** H without parametric assumptions.
+## What is identifiable, and how
 
-## Key Results
+| Quantity | Identified from | Estimator in `fsde/` |
+| --- | --- | --- |
+| H | fine sampling (dt → 0) | change-of-frequency estimator on second differences (lags 1, 2, 4); drift-robust; bootstrap CI |
+| σ(x) | fine sampling | kernel-smoothed squared second differences ÷ dt^{2H}(4 − 2^{2H}), with a localisation debias |
+| μ(x) | long horizon (T → ∞), ergodicity | fGn(H)-whitened generalised least squares on a B-spline sieve, after the Lamperti transform |
 
-| Parameter | Method | Error |
-|-----------|--------|-------|
-| **H** (Hurst exponent) | Aggregated variance | 2-3% |
-| **σ(x)** (diffusion) | Local quadratic variation | <3% |
-| **μ(x)** (drift) | fGN-whitened regression + eigenvalue constraint | 25-40% MRE |
+On a fixed time horizon the drift is not consistently estimable, because laws with different drifts are equivalent.
 
-### Identifiability Theorem (Verified)
+**Why whitening matters.** For H ≠ 1/2, plain regression of increments on the state is badly biased. On fOU with true slope −1 it gives −6.9 at H = 0.2 and −0.24 at H = 0.7. Whitened GLS gives −0.96 to −1.03 at every H. Accuracy with everything estimated is in [`results/phase0_grid.md`](results/phase0_grid.md).
 
-**(μ, σ, H) are UNIQUELY identifiable** from trajectory data alone:
-
-- **H**: From increment autocorrelation ρ(k) = ½(|k+1|^{2H} - 2|k|^{2H} + |k-1|^{2H})
-- **σ(x)**: From local QV: E[(dX)²|X=x] / dt^{2H}
-- **μ(x)**: From conditional mean E[dX|X=x] / dt with fGN whitening
-
-No equivalence class - unique solution (follows from Stroock-Varadhan uniqueness).
-
-## Why Whitening is Essential
-
-At typical dt and H<0.5, **noise dominates signal**:
-- Drift contribution: O(dt)
-- Noise contribution: O(dt^H) >> O(dt) when H < 0.5
-
-**Without whitening, regression learns the NOISE, not the drift!**
-
-The fGN whitening procedure:
-1. Estimate H from trajectory
-2. Build fGN correlation matrix
-3. Cholesky factorize: Σ = L @ L^T
-4. Whiten: dx_w = L^{-1} @ dx
-5. Regress whitened features on whitened dx
-
-**Key insight**: Cholesky L^{-1} is lower triangular → whitening is CAUSAL (online-capable).
-
-## Quick Start
+## Quick start
 
 ```bash
-# Setup
-conda env create -f environment.yml
-conda activate fsde
-
-# Run example
-python examples/test_generator_estimator.py
+pip install -e ".[test]"
+python -m pytest                       # ~15 s
+python examples/phase0_grid.py         # accuracy grid, ~10 min
 ```
-
-## Usage
 
 ```python
-from src.generator_estimator import GeneratorEstimator
-from src.rough_paths_generator import FractionalBrownianMotion
+import numpy as np
+import fsde
 
-# Generate fSDE trajectory
-fbm = FractionalBrownianMotion(H=0.3, dt=0.01)
-# ... simulate trajectory X
+model = fsde.hyperbolic(kappa=1.0, s=0.5)          # dX = -X dt + 0.5 sqrt(1+X^2) dB^H
+x = fsde.simulate_fsde(model, H=0.3, dt=0.02, n=50_000, burn_in=200, rng=0)
 
-# Estimate parameters
-estimator = GeneratorEstimator(backend='koopman', whiten=True)
-estimator.fit(X, dt=0.01)
+fit = fsde.fit_fsde(x, dt=0.02)                     # estimates H, sigma(x), mu(x)
+grid = np.linspace(-0.5, 0.5, 5)                    # stay in the bulk of the data;
+                                                    # estimates degrade in the tails
+print(fit.H)                                        # ~0.30
+print(fit.sigma(grid), model.sigma(grid))
+print(fit.mu(grid), fit.mu_se(grid), model.mu(grid))
 
-# Get estimates
-H_est = estimator.H_
-mu_pred = estimator.predict_drift(x_eval)
-sigma_pred = estimator.predict_diffusion(x_eval)
+ci = fsde.hurst_bootstrap(x, n_boot=200)            # CI for H
 ```
 
-## Project Structure
+## Project structure
 
 ```
 fsde-identifiability/
-├── src/
-│   ├── generator_estimator.py    # Core estimator (Profile REML)
-│   ├── rough_paths_generator.py  # fBM simulation
-│   ├── hurst_estimators.py       # H estimation methods
-│   ├── spectral_hurst.py         # Spectral H estimation
-│   └── sskf/
-│       ├── nystrom_koopman.py    # Nyström eigenfunction extraction
-│       └── tensor_features.py    # Signature features
-├── examples/
-│   ├── test_generator_estimator.py
-│   ├── test_nystrom_koopman_signatures.py
-│   └── test_signature_consistency_training.py
-├── papers/
-│   └── jmlr_fsde_identifiability_outline.md
-└── docs/
-    ├── generator_estimator_walkthrough.md
-    └── spectral_roughness_theory.md
+├── fsde/                 # audited estimators (use this)
+│   ├── fgn.py            # fGn sampler (exact), Toeplitz solves
+│   ├── simulate.py       # fBm, Lamperti-based fSDE simulation, models
+│   ├── hurst.py          # H estimation + bootstrap CI
+│   ├── diffusion.py      # sigma(x)
+│   ├── drift.py          # whitened sieve GLS for the drift
+│   ├── fit.py            # end-to-end fit_fsde
+│   └── tests/
+├── examples/phase0_grid.py
+├── results/phase0_grid.md
+├── docs/phase0.md        # audit findings, method, limitations
+├── src/                  # LEGACY: kept for reference, do not extend
+├── docs/mllm/, papers/   # pre-audit notes; claims unverified
+└── pyproject.toml
 ```
 
-## Key Innovations
+## Next (Phase 1 onward)
 
-### 1. Profile REML Regularization
-GCV degenerates for function estimation when dt appears in design matrix. Profile REML with log-determinant penalty gives ~5x improvement.
-
-### 2. Eigenvalue Amplitude Constraint
-Shape is often correct (0.96 corr) but amplitude wrong. Use Koopman eigenvalue λ to constrain:
-- For linear drift: λ = exp(-slope·dt)
-- Rescale: μ_corrected = μ̂ × (log(λ)/dt) / slope_raw
-
-### 3. Nyström-Koopman for Scalability
-O(m³) instead of O(n³) for eigenfunction extraction. Works with both RBF and signature kernels.
-
-## Theory
-
-Based on:
-- Hida-Malliavin chaos decomposition
-- Signature RKHS isomorphism
-- Stroock-Varadhan uniqueness of martingale problems
-
-See [papers/jmlr_fsde_identifiability_outline.md](papers/jmlr_fsde_identifiability_outline.md) for the full paper structure.
-
-## Citation
-
-```bibtex
-@article{fsde-identifiability,
-  title={Nonparametric Estimation of Fractional SDE Parameters},
-  author={Mehrez, Edward},
-  journal={In preparation for JMLR},
-  year={2026}
-}
-```
+- Rates for (Ĥ, σ̂, μ̂) with plug-in error, including the log(1/dt) amplification of H error in σ̂.
+- A data-driven choice of sieve dimension.
+- Bands for μ that account for the uncertainty in Ĥ and σ̂.
+- Use the estimators as the backbone of a long-memory-fidelity benchmark for generative models.
 
 ## License
 

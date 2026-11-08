@@ -1,0 +1,19 @@
+[project]
+name = "fsde"
+version = "0.1.0"
+description = "Audited estimators for 1-D fractional SDEs: Hurst exponent, diffusion and drift"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.21", "scipy>=1.11"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["fsde"]
+
+[tool.pytest.ini_options]
+testpaths = ["fsde/tests"]

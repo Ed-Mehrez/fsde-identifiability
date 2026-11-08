@@ -65,8 +65,20 @@ against closed forms or ground truth:
 - the numerical Lamperti map against the analytic one;
 - estimator accuracy on fBm, fOU and a state-dependent model.
 
-Accuracy grid, everything estimated: see [`results/phase0_grid.md`](../results/phase0_grid.md),
-produced by `python examples/phase0_grid.py`.
+Accuracy grid with everything estimated (dt = 0.02, T = 1000, 8 replicates per
+cell, H from 0.2 to 0.8): see [`results/phase0_grid.md`](../results/phase0_grid.md),
+produced by `python examples/phase0_grid.py` (about 6 min). Summary:
+
+- **H:** mean error at most 0.005 in every cell; sd 0.003 to 0.009.
+- **sigma(x):** 1.4% to 5% relative L2 in 14 of 15 cells. The exception is the
+  state-dependent model at H = 0.8, at 16%. That error is the H-error
+  amplification below, not the sigma estimator: with true H it is 1-3%. There,
+  H_hat is 0.005-0.02 low per path, which scales sigma_hat by 5-10% at dt = 0.02.
+- **mu(x):** 8% to 24% relative L2 for H from 0.2 to 0.65. Worse at H = 0.8
+  (20% to 42%), where long memory slows mixing and a fixed T carries less
+  information.
+- **Bands for mu:** coverage of the pointwise 95% bands is 0.70 to 1.00. They are
+  too narrow where sieve bias dominates (small H, state-dependent sigma).
 
 Drift on fOU (kappa = 1, dt = 0.05, T = 200, linear basis, 30 replicates;
 truth -1):

@@ -1,0 +1,65 @@
+{
+  "au_reservoir_log_volume | chronos-2": {
+    "n_series": 267,
+    "gap_vs_cov_gap": {
+      "rho": -0.12920479042446853,
+      "p": 0.03484362206253018
+    },
+    "absgap_vs_abs_miscal": {
+      "rho": 0.03481560919680377,
+      "p": 0.5711257121349359
+    },
+    "absgap_vs_loss_vs_baseline": {
+      "rho": 0.06725908366602938,
+      "p": 0.27346991207846777
+    },
+    "within_origin_gap_vs_cov": {
+      "mean_rho": -0.10417953902989291,
+      "n_origins": 30,
+      "t": -6.966753808676627,
+      "p": 1.1686731243435457e-07
+    }
+  },
+  "au_reservoir_log_volume | chronos-bolt-small": {
+    "n_series": 267,
+    "gap_vs_cov_gap": {
+      "rho": -0.30870201089983623,
+      "p": 2.649414187864113e-07
+    },
+    "absgap_vs_abs_miscal": {
+      "rho": 0.3150616919761304,
+      "p": 1.4521365395166301e-07
+    },
+    "absgap_vs_loss_vs_baseline": {
+      "rho": -0.19992245410685885,
+      "p": 0.0010210713662778207
+    },
+    "within_origin_gap_vs_cov": {
+      "mean_rho": -0.0624716558831865,
+      "n_origins": 30,
+      "t": -3.2831238420968067,
+      "p": 0.002681096696283327
+    }
+  },
+  "au_reservoir_log_volume | timesfm-2.5": {
+    "n_series": 267,
+    "gap_vs_cov_gap": {
+      "rho": -0.12394620601530407,
+      "p": 0.04301080741188572
+    },
+    "absgap_vs_abs_miscal": {
+      "rho": 0.10422328003399937,
+      "p": 0.08919413438832821
+    },
+    "absgap_vs_loss_vs_baseline": {
+      "rho": 0.1088003555762905,
+      "p": 0.07594026225936812
+    },
+    "within_origin_gap_vs_cov": {
+      "mean_rho": -0.134232268553878,
+      "n_origins": 30,
+      "t": -7.255391523813811,
+      "p": 5.4574710062975494e-08
+    }
+  }
+}

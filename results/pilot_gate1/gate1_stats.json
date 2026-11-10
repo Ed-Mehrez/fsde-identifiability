@@ -1,0 +1,32 @@
+{
+  "cell: dH_fc vs long coverage gap": {
+    "spearman": 0.7691812819307979,
+    "p": 4.233847303221946e-08,
+    "n": 36
+  },
+  "cell: (H_ctx - H_fc) vs long coverage gap": {
+    "spearman": -0.7997425997425998,
+    "p": 4.887373804679874e-09,
+    "n": 36
+  },
+  "series[chronos-2]: (H_ctx - H_fc) vs log long-horizon dispersion": {
+    "spearman": 0.20337097801008938,
+    "p": 3.2246454430626213e-43,
+    "n": 4500
+  },
+  "series[chronos-bolt-small]: (H_ctx - H_fc) vs log long-horizon dispersion": {
+    "spearman": 0.11041195225079596,
+    "p": 1.1082093173224227e-13,
+    "n": 4500
+  },
+  "series[oracle]: (H_ctx - H_fc) vs log long-horizon dispersion": {
+    "spearman": -0.00953817449571232,
+    "p": 0.5223826177488533,
+    "n": 4500
+  },
+  "series[timesfm-2.5]: (H_ctx - H_fc) vs log long-horizon dispersion": {
+    "spearman": 0.1658559742151098,
+    "p": 4.053411534677127e-29,
+    "n": 4500
+  }
+}

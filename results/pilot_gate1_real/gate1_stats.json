@@ -1,0 +1,191 @@
+{
+  "crypto_log_price | chronos-2": {
+    "n_series": 172,
+    "gap_vs_cov_gap": {
+      "rho": -0.23997283128804164,
+      "p": 0.0015205783400725765
+    },
+    "absgap_vs_abs_miscal": {
+      "rho": -0.08271140392914139,
+      "p": 0.280726166973421
+    },
+    "absgap_vs_loss_vs_baseline": {
+      "rho": 0.03598153873728547,
+      "p": 0.6393525258280829
+    },
+    "within_origin_gap_vs_cov": {
+      "mean_rho": -0.06508455433763076,
+      "n_origins": 36,
+      "t": -3.5571403505363386,
+      "p": 0.0010995949992702763
+    }
+  },
+  "crypto_log_price | chronos-bolt-small": {
+    "n_series": 172,
+    "gap_vs_cov_gap": {
+      "rho": -0.3770548153326823,
+      "p": 3.425030111800813e-07
+    },
+    "absgap_vs_abs_miscal": {
+      "rho": 0.18722745915520864,
+      "p": 0.013918962672569906
+    },
+    "absgap_vs_loss_vs_baseline": {
+      "rho": 0.2291290802621556,
+      "p": 0.002499391113273047
+    },
+    "within_origin_gap_vs_cov": {
+      "mean_rho": -0.17146530633555743,
+      "n_origins": 36,
+      "t": -11.446689519389725,
+      "p": 2.2039735814758816e-13
+    }
+  },
+  "crypto_log_price | timesfm-2.5": {
+    "n_series": 172,
+    "gap_vs_cov_gap": {
+      "rho": -0.13230538290632388,
+      "p": 0.08360699767380322
+    },
+    "absgap_vs_abs_miscal": {
+      "rho": 0.0801987664492731,
+      "p": 0.2956473780258759
+    },
+    "absgap_vs_loss_vs_baseline": {
+      "rho": 0.09865974251396739,
+      "p": 0.1978785615314025
+    },
+    "within_origin_gap_vs_cov": {
+      "mean_rho": -0.12715065079316737,
+      "n_origins": 36,
+      "t": -6.14316171054926,
+      "p": 5.003899843249742e-07
+    }
+  },
+  "crypto_log_rv | chronos-2": {
+    "n_series": 172,
+    "gap_vs_cov_gap": {
+      "rho": 0.07276123363706831,
+      "p": 0.3428473232258403
+    },
+    "absgap_vs_abs_miscal": {
+      "rho": 0.03070159923140656,
+      "p": 0.6892994669929128
+    },
+    "absgap_vs_loss_vs_baseline": {
+      "rho": 0.2870292413383236,
+      "p": 0.00013478404675985197
+    },
+    "within_origin_gap_vs_cov": {
+      "mean_rho": 0.04962888911944559,
+      "n_origins": 36,
+      "t": 2.3098127939811097,
+      "p": 0.026917103222383124
+    }
+  },
+  "crypto_log_rv | chronos-bolt-small": {
+    "n_series": 172,
+    "gap_vs_cov_gap": {
+      "rho": 0.06845504469657508,
+      "p": 0.3722427296483352
+    },
+    "absgap_vs_abs_miscal": {
+      "rho": 0.14694392070513176,
+      "p": 0.054410540046387214
+    },
+    "absgap_vs_loss_vs_baseline": {
+      "rho": 0.23607681658777943,
+      "p": 0.0018224899575547287
+    },
+    "within_origin_gap_vs_cov": {
+      "mean_rho": 0.026937280187430104,
+      "n_origins": 36,
+      "t": 1.3932862036016436,
+      "p": 0.17231932735060193
+    }
+  },
+  "crypto_log_rv | timesfm-2.5": {
+    "n_series": 172,
+    "gap_vs_cov_gap": {
+      "rho": 0.06186798486573832,
+      "p": 0.42010033052304363
+    },
+    "absgap_vs_abs_miscal": {
+      "rho": -0.0036048210507377875,
+      "p": 0.9625672640107388
+    },
+    "absgap_vs_loss_vs_baseline": {
+      "rho": 0.2146487336771826,
+      "p": 0.004689848125859882
+    },
+    "within_origin_gap_vs_cov": {
+      "mean_rho": 0.11599510047136241,
+      "n_origins": 36,
+      "t": 5.6274382197309665,
+      "p": 2.3928539578984895e-06
+    }
+  },
+  "entsoe_price | chronos-2": {
+    "n_series": 44,
+    "gap_vs_cov_gap": {
+      "rho": -0.06624383368569414,
+      "p": 0.6692105230475629
+    },
+    "absgap_vs_abs_miscal": {
+      "rho": -0.4553911205073995,
+      "p": 0.001895500200738516
+    },
+    "absgap_vs_loss_vs_baseline": {
+      "rho": -0.09837914023960535,
+      "p": 0.5252125725129893
+    },
+    "within_origin_gap_vs_cov": {
+      "mean_rho": -0.20738922951197306,
+      "n_origins": 32,
+      "t": -5.356235568111133,
+      "p": 7.732060690914327e-06
+    }
+  },
+  "entsoe_price | chronos-bolt-small": {
+    "n_series": 44,
+    "gap_vs_cov_gap": {
+      "rho": 0.3446914974478665,
+      "p": 0.02194480941383561
+    },
+    "absgap_vs_abs_miscal": {
+      "rho": 0.16589731854268608,
+      "p": 0.2818209093272459
+    },
+    "absgap_vs_loss_vs_baseline": {
+      "rho": -0.14460887949260043,
+      "p": 0.3489913039363368
+    },
+    "within_origin_gap_vs_cov": {
+      "mean_rho": -0.09457346477285108,
+      "n_origins": 32,
+      "t": -2.6266206595203,
+      "p": 0.01328161405646899
+    }
+  },
+  "entsoe_price | timesfm-2.5": {
+    "n_series": 44,
+    "gap_vs_cov_gap": {
+      "rho": 0.2857243558272516,
+      "p": 0.06009113182503529
+    },
+    "absgap_vs_abs_miscal": {
+      "rho": -0.09592275487935112,
+      "p": 0.5356574688581957
+    },
+    "absgap_vs_loss_vs_baseline": {
+      "rho": 0.04129668780831571,
+      "p": 0.7901169774173183
+    },
+    "within_origin_gap_vs_cov": {
+      "mean_rho": -0.06869747294064936,
+      "n_origins": 32,
+      "t": -1.6905205233579808,
+      "p": 0.10096107606368969
+    }
+  }
+}

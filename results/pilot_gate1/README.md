@@ -50,7 +50,7 @@ Per series (4,500 per model), the label-free gap against long-horizon dispersion
 ## What this does and does not show
 
 - **Shown:** on fBm, models trained on real data do not track long memory beyond about H = 0.6. The error is invisible at short horizons and costs 10–25% in quantile loss at long horizons.
-- **Shown:** a diagnostic that needs no future data, the context Ĥ minus the forecast-implied H, ranks cells by how miscalibrated they are.
+- **Overstated (see `../AUDIT_2026-11-11.md`):** the label-free gap's ρ = −0.82 is across cells, where the context Ĥ ≈ true H, so it mostly restates that coverage falls as H rises. Within a fixed H, its per-series correlation with long-horizon coverage averages only −0.17.
 - **Not shown:** that this matters on real data. fBm with H = 0.9 is an extreme test, and the link between H error and long-horizon coverage is partly mechanical on fBm. Stage B (real series with long memory: realised volatility, hydrology, traffic) is the actual Gate 1 test.
 - **Not separated:** how much of the miss comes from width scaling and how much from a misplaced median. For H > 1/2 the oracle mean extrapolates persistent trends. Chronos-Bolt at H = 0.8 has about the right width at k = 64 (×1.06) but still covers only 0.72, which suggests the median is also off.
 - **One configuration:** context 512 and horizon 64 only, and the 80% interval only. TimesFM 3 was not tested: it is not on PyPI, and GitHub is not reachable from this environment.

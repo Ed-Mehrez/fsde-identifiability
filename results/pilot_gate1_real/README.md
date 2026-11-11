@@ -1,6 +1,8 @@
 # Gate 1 pilot, stage B: real series, all forecast targets in 2026
 
-**Verdict: weak pass.** The fBm failure (stage A) shows up on real data in direction but not in size:
+> **Audit correction (2026-11-11), see `../AUDIT_2026-11-11.md`.** The p-values below treat overlapping weekly origins as independent. 2026 contains only 3–4 non-overlapping 64-day target periods per domain, so they are overstated; read the per-period sign consistency instead. The high-H reservoir windows are trend-dominated (second-difference roughness ≈ 1), not fractional long memory. The verdict is downgraded from "weak pass" to **inconclusive**.
+
+**Original verdict: weak pass.** The fBm failure (stage A) shows up on real data in direction but not in size:
 
 - **Persistent reservoirs:** the models under-cover by 5–12 points at long horizons, while an H-agnostic baseline stays calibrated.
 - **The no-future-data gap check:** it points the right way in 3 of 4 domains, but is weak (within-date |ρ| ≤ 0.21, against 0.82 on fBm).

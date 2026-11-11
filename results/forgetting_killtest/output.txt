@@ -1,0 +1,59 @@
+H=0.2 sigma= 0.3: EMA/opt 1.106  bank2 1.009  bank3 1.009  bank4 1.008
+H=0.2 sigma= 1.0: EMA/opt 1.070  bank2 1.013  bank3 1.012  bank4 1.009
+H=0.2 sigma= 3.0: EMA/opt 1.057  bank2 1.243  bank3 1.008  bank4 1.002
+H=0.2 sigma=10.0: EMA/opt 1.039  bank2 2.556  bank3 1.253  bank4 1.008
+H=0.2 sigma=30.0: EMA/opt 1.028  bank2 2.466  bank3 1.821  bank4 1.175
+H=0.3 sigma= 0.3: EMA/opt 1.094  bank2 1.019  bank3 1.017  bank4 1.016
+H=0.3 sigma= 1.0: EMA/opt 1.034  bank2 1.037  bank3 1.034  bank4 1.029
+H=0.3 sigma= 3.0: EMA/opt 1.027  bank2 1.086  bank3 1.002  bank4 1.002
+H=0.3 sigma=10.0: EMA/opt 1.022  bank2 2.341  bank3 1.066  bank4 1.001
+H=0.3 sigma=30.0: EMA/opt 1.019  bank2 3.630  bank3 1.740  bank4 1.036
+H=0.5 sigma= 0.3: EMA/opt 1.083  bank2 1.042  bank3 1.036  bank4 1.035
+H=0.5 sigma= 1.0: EMA/opt 1.079  bank2 1.146  bank3 1.108  bank4 1.100
+H=0.5 sigma= 3.0: EMA/opt 1.012  bank2 1.006  bank3 1.003  bank4 1.002
+H=0.5 sigma=10.0: EMA/opt 1.001  bank2 1.482  bank3 1.018  bank4 1.010
+H=0.5 sigma=30.0: EMA/opt 1.000  bank2 3.497  bank3 1.120  bank4 1.015
+H=0.7 sigma= 0.3: EMA/opt 1.089  bank2 1.068  bank3 1.059  bank4 1.058
+H=0.7 sigma= 1.0: EMA/opt 1.290  bank2 1.289  bank3 1.200  bank4 1.191
+H=0.7 sigma= 3.0: EMA/opt 1.061  bank2 1.163  bank3 1.040  bank4 1.036
+H=0.7 sigma=10.0: EMA/opt 1.039  bank2 1.127  bank3 1.083  bank4 1.043
+H=0.7 sigma=30.0: EMA/opt 1.040  bank2 2.173  bank3 1.029  bank4 1.001
+H=0.8 sigma= 0.3: EMA/opt 1.106  bank2 1.090  bank3 1.078  bank4 1.077
+H=0.8 sigma= 1.0: EMA/opt 1.505  bank2 1.375  bank3 1.251  bank4 1.240
+H=0.8 sigma= 3.0: EMA/opt 1.150  bank2 1.311  bank3 1.068  bank4 1.060
+H=0.8 sigma=10.0: EMA/opt 1.111  bank2 1.094  bank3 1.094  bank4 1.053
+H=0.8 sigma=30.0: EMA/opt 1.114  bank2 1.853  bank3 1.119  bank4 1.009
+H=0.9 sigma= 0.3: EMA/opt 1.155  bank2 1.141  bank3 1.122  bank4 1.120
+H=0.9 sigma= 1.0: EMA/opt 1.715  bank2 1.509  bank3 1.310  bank4 1.295
+H=0.9 sigma= 3.0: EMA/opt 1.272  bank2 1.472  bank3 1.068  bank4 1.060
+H=0.9 sigma=10.0: EMA/opt 1.293  bank2 1.138  bank3 1.125  bank4 1.072
+H=0.9 sigma=30.0: EMA/opt 1.304  bank2 1.768  bank3 1.228  bank4 1.023
+
+MSE of best single EMA / MSE of optimal filter
+sigma   0.3    1.0    3.0    10.0   30.0
+H                                       
+0.2    1.106  1.070  1.057  1.039  1.028
+0.3    1.094  1.034  1.027  1.022  1.019
+0.5    1.083  1.079  1.012  1.001  1.000
+0.7    1.089  1.290  1.061  1.039  1.040
+0.8    1.106  1.505  1.150  1.111  1.114
+0.9    1.155  1.715  1.272  1.293  1.304
+
+MSE of optimal 3-EMA bank (windows 1, 4, 16) / optimal
+sigma   0.3    1.0    3.0    10.0   30.0
+H                                       
+0.2    1.009  1.012  1.008  1.253  1.821
+0.3    1.017  1.034  1.002  1.066  1.740
+0.5    1.036  1.108  1.003  1.018  1.120
+0.7    1.059  1.200  1.040  1.083  1.029
+0.8    1.078  1.251  1.068  1.094  1.119
+0.9    1.122  1.310  1.068  1.125  1.228
+
+MSE of best tuned 2-EMA combination (free windows and coefficients) / optimal
+sigma   1.0    3.0    10.0
+H                         
+0.2    1.013  1.009  1.003
+0.5    1.011  1.000  1.000
+0.7    1.006  1.002  1.003
+0.8    1.005  1.005  1.005
+0.9    1.008  1.008  1.008

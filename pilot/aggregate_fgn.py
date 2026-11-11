@@ -22,6 +22,12 @@ Reference forecasts:
 "Marginal sources": chronos-2, timesfm-2.5, and the oracle's own per-horizon marginals
 (isolates the error due to the dependence assumption alone).
 
+Added after the first run (2026-11-11), prompted by prior art, not pre-registered:
+  ar1_copula  - per-horizon median and sd from the model, AR(1) correlation rho^|i-j|
+                with rho = lag-1 autocorrelation of the context. This is the copula
+                used by existing work on foundation-model marginals (Baron et al. 2025,
+                arXiv 2510.02224; Choi et al. 2026, arXiv 2609.25980).
+
 Primary outcome: at n = 64, coverage of the 80% interval for S_n and pinball loss of
 S_n relative to the oracle. Hypotheses: indep under-covers increasingly with H > 0.5
 and over-covers at H = 0.3; comonotone over-covers; fgn_copula is closest to nominal
@@ -148,6 +154,13 @@ def main():
                     R = C_ / np.sqrt(np.outer(np.diag(C_), np.diag(C_)))
                     cop_sd[i] = np.sqrt(s_k[i] @ R @ s_k[i])
                 forecasts[(src, "fgn_copula")] = gaussian_q(med.sum(1), cop_sd)
+                ar_sd = np.empty(N)
+                lag = np.abs(np.arange(n)[:, None] - np.arange(n)[None, :])
+                for i in range(N):
+                    c = d["ctx"][i]
+                    rho = np.clip(np.corrcoef(c[:-1], c[1:])[0, 1], -0.99, 0.99)
+                    ar_sd[i] = np.sqrt(s_k[i] @ (rho ** lag) @ s_k[i])
+                forecasts[(src, "ar1_copula")] = gaussian_q(med.sum(1), ar_sd)
             for (src, rule), qf in forecasts.items():
                 qf = np.sort(qf, axis=-1)
                 rows.append(dict(H=H, n=n, source=src, rule=rule,

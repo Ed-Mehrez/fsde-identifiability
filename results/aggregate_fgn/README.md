@@ -5,6 +5,7 @@
 - **Independence** gives intervals for the 64-step total that are 0.26–0.46× the correct width at H = 0.7–0.9, so they cover only 23–43% instead of 80%. At H = 0.3 they are 2.4× too wide.
 - **Comonotonicity** (all horizons moving in lockstep) gives intervals 2–20× too wide.
 - **An fGn copula with H estimated from the context** gives widths within 2% of the oracle at every H.
+- **The AR(1) copula used in existing work** on foundation-model marginals is also short-memory. Its intervals are 0.53–0.63× the oracle width at H = 0.7–0.9, with coverage 0.45–0.57.
 
 The design and hypotheses were fixed in the script docstring before the first run (`pilot/aggregate_fgn.py`).
 
@@ -70,6 +71,23 @@ The coverage standard error is about 0.023 per cell (300 independent series). Al
 | comonotone over-covers | Yes: 0.96–1.00, 2–20× too wide |
 | fgn_copula closest to nominal | Yes: 0.71–0.78, against 0.23–1.00 for the others |
 | fgn_copula has the lowest pinball loss of the three rules | Yes, except H = 0.5, where the three rules coincide in theory and the noise in Ĥ costs a hair (1.127 vs 1.122; TimesFM 1.126 vs 1.117) |
+
+## Against the prior-art baseline: the AR(1) copula
+
+This rule was added after the first run, prompted by the prior-art search, so it was not pre-registered. Existing work already pairs frozen foundation-model marginals with a Gaussian copula: Baron et al. 2025 (arXiv 2510.02224), Choi et al. 2026 (arXiv 2609.25980) and PathFM / fps-bench (arXiv 2610.22358). All of them use AR(1) correlation, ρ^|i−j| with ρ = the context's lag-1 autocorrelation. That copula is short-memory: it gives Var(sum) ~ n rather than n^(2H).
+
+| n = 64 | H = 0.3 | 0.5 | 0.7 | 0.8 | 0.9 |
+| --- | --- | --- | --- | --- | --- |
+| Coverage, Chronos-2 + AR(1) copula | 0.99 | 0.75 | 0.56 | 0.49 | 0.45 |
+| Coverage, Chronos-2 + fGn copula | 0.75 | 0.76 | 0.78 | 0.77 | 0.71 |
+| Coverage, TimesFM-2.5 + AR(1) copula | 0.97 | 0.78 | 0.57 | 0.48 | 0.48 |
+| Coverage, TimesFM-2.5 + fGn copula | 0.71 | 0.77 | 0.78 | 0.78 | 0.76 |
+| Width ÷ oracle, AR(1) (Chronos-2) | 1.93 | 1.00 | 0.63 | 0.55 | 0.53 |
+| Width ÷ oracle, fGn (Chronos-2) | 1.00 | 1.00 | 0.98 | 0.98 | 0.98 |
+| Pinball ÷ oracle, AR(1) / fGn (Chronos-2) | 1.24 / 1.20 | 1.12 / 1.13 | 1.13 / 1.09 | 1.04 / 1.01 | 1.26 / 1.19 |
+| Pinball ÷ oracle, AR(1) / fGn (TimesFM-2.5) | 1.26 / 1.22 | 1.12 / 1.13 | 1.14 / 1.09 | 1.10 / 1.04 | 1.14 / 1.09 |
+
+The AR(1) copula's error grows with the length of the total, as long-memory theory predicts. At H = 0.8 (Chronos-2), its width falls from 0.91× the oracle at n = 8 to 0.79×, 0.67× and 0.55× at n = 16, 32, 64. The fGn copula stays at 0.98× throughout. In pinball loss the gain is consistent but modest (3–7%), because errors in the median dominate pinball loss of the total. The difference is mainly in coverage and the tails.
 
 ## Caveats
 

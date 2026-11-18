@@ -97,6 +97,24 @@ Koopman theory is valid here: unlike the fSDE work, the loop's state evolves und
 
 **The bar.** Koopman/DMD extrapolation of fixed-point iterates is closely related to Krylov acceleration (DMD ≈ Arnoldi; Anderson acceleration ≈ GMRES). A Koopman filter must therefore beat **Anderson acceleration** at matched block evaluations, or it is a known accelerator under a new name.
 
+**Prior art (search of 2026-11-18; snippets only, full texts not read).** Inference-time solver swaps on looped reasoners are largely taken:
+
+- Spherical Fixed-Point Reasoners (Zela et al. 2026, arXiv 2610.25646) swap in Anderson and Broyden at inference. Anderson halts earlier with about the same accuracy on Maze.
+- Park & Rusch 2026 (arXiv 2610.18174) use Anderson to find the roots of FPRM and HRM and study the local Jacobian spectra.
+- TAPS (Wang et al. 2026, arXiv 2609.36653) is a training-free adaptive step size for TRM.
+- Solve the Loop (Fein-Ashley & Rashidinejad, ICML 2026) uses an Anderson root-finder.
+- Invariant-Measure Reasoners (Inui, Konishi, Kawahara 2026, arXiv 2610.10996) bring Koopman-style ideas to looped reasoners.
+- Per-dimension Kalman residual updates exist in the Precision Tracked Transformer (arXiv 2605.18832) and Recurrent Kalman Networks (ICML 2019).
+- For a linearised loop, windowed DMD ≈ MPE ≈ Krylov ≈ Anderson (Sidi; Rowley et al. 2009).
+
+Consequences for this part:
+
+- D3 and TAPS are **baselines**, not contributions.
+- D-1 and D-2 are replications.
+- Novelty rests on D-4 (kernel lifting beats Anderson during search) and D-5 (a per-channel Kalman filter for InfiLoop); both are medium at best.
+- Add TAPS as variant D7 if its code is public.
+- Cite all of the above.
+
 **Variants** (all applied at inference to existing checkpoints; compute is counted in block evaluations):
 
 | ID | Update rule | Notes |
@@ -125,8 +143,8 @@ Koopman theory is valid here: unlike the fSDE work, the loop's state evolves und
 
 **Registered predictions.**
 
-- D-1. Anderson (D3) cuts the block evaluations to settle by at least 30% against carry-last on held solutions of TRM-control, HRM and EqR, and lowers final accuracy by no more than 1 point.
-- D-2. On FPRM (Sudoku) and SFPRM (Mini-ARC), whose solutions carry-last cannot hold, D3 or D4 settles at least 80% of the solutions the model's own adaptive solver settles, at no more than 50% of its block evaluations.
+- D-1 (replication of SFPRM / Park & Rusch). Anderson (D3) cuts the block evaluations to settle by at least 30% against carry-last on held solutions of TRM-control, HRM and EqR, and lowers final accuracy by no more than 1 point.
+- D-2 (replication). On FPRM (Sudoku) and SFPRM (Mini-ARC), whose solutions carry-last cannot hold, D3 or D4 settles at least 80% of the solutions the model's own adaptive solver settles, at no more than 50% of its block evaluations.
 - D-3. This prediction is deliberately sceptical. On the overthinking TRM checkpoint, no variant among D3–D6 recovers more than half of the answers carry-last loses between budgets 16 and 256: those losses are search failures far from fixed points (§10).
 - D-4. This prediction carries the novelty. The kernel Koopman–Kalman filter (D5) beats Anderson (D3) in share solved at a budget of 32 block evaluations on at least 2 of the 5 Mini-ARC models, by at least 2 points. If it fails, the Koopman framing reduces to acceleration and is reported as such.
 - D-5. This needs InfiLoop weights. On InfiLoop, the per-channel Kalman gain (D6) raises the share solved after the trained depth by at least 2 points over the scalar learned filter (D2) at the trained decay.

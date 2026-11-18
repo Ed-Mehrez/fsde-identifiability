@@ -5,7 +5,7 @@ Written 2026-11-11 so that a session on a machine with a GPU can run it from a f
 - `results/looped_filter_fgn/README.md`: the link to Rozwood, *Looped Reasoning as Closed-Loop Filtering* (draft v0).
 - `results/forgetting_killtest/README.md`: two EMAs are within about 1% of the optimal filter for long-memory drift.
 
-Run Part A first: it is quick and decides whether the optimizer route stays open. Part B is the main line.
+Run Part A first: it is quick and decides whether the optimizer route stays open. Part B (loop-axis memory), Part C (does the gain change which solution is found?) and Part D (a better filter: Koopman / Kalman against Anderson acceleration) are the looped-reasoner line; C and D bear most directly on the draft paper.
 
 All predictions below are fixed **before** running. Report every one with its outcome, in the style of the draft's appendix C. Use `fsde.hurst_second_diff` and `fsde.hurst_bootstrap` for H. Never use first-difference variograms; they are biased by drift (`docs/phase0.md`).
 
@@ -67,3 +67,71 @@ Save as `npz`, one file per model.
 - B5. This needs InfiLoop weights. If the search-phase innovation H for InfiLoop's outer state is above 0.55, replacing its single outer decay at inference with a tuned two-decay filter (an AdEMAMix-style mixture of two EMAs with a learned or tuned mixing weight; tune on 64 held-out puzzles, evaluate on the other 192) raises the share of puzzles solved after the trained depth by at least 2 points. If H ≤ 0.55, it does not.
 
 **Outputs.** Commit `results/looped_memory/` containing the measurement script, the per-model tables, and a README listing every prediction with its outcome. Commit raw rollouts only if they are small (under about 50 MB); otherwise keep them local.
+
+## Part C: does the gain change *which* solution is found? (about one GPU-day)
+
+**Why.** The draft explains *holding*; accuracy is decided by *finding* (its §10). The ODE method says that as γ → 0 the loop tracks the flow ḣ = f(h) − h, so which solution is found is set by the flow's basins. Prior art (Equilibrium Reasoners, the HRM and TRM attractor papers, Anil et al. 2022) already claims that basins decide finding, but nobody has measured, solution by solution, whether *damping changes the basin a puzzle lands in*. If it does not, the ODE theory adds little beyond Euler steps and should be dropped.
+
+**Setup.**
+
+- **Models:** carry-last models first (TRM, HRM and EqR on Mini-ARC; both TRM checkpoints on Sudoku), then FPRM / SFPRM.
+- **Runs:** for each puzzle, start from the model's initial state. Run the loop at a constant gain γ ∈ {1, 0.5, 0.25, 0.1} for 16 × trained depth / γ block evaluations, so all gains reach the same flow time.
+- **Flow reference:** integrate ḣ = f(h) − h with an adaptive solver (RK45, rtol 1e−5) to the same flow time.
+- **Recorded per puzzle and per run:** the decoded answer, whether it is correct, the final residual, and the distance between end states of different runs. Two runs "agree" if their decoded boards match and their end states are within 1% relative distance.
+- **Lyapunov check:** along each flow trajectory, record whether the residual ‖f(h) − h‖² decreases monotonically.
+
+**Registered predictions.**
+
+- C1. For the carry-last models on Mini-ARC, the decoded answer differs between γ = 1 and γ = 0.1 for at least 10% of tasks. **Kill criterion:** below 5% means the basins do not depend on the gain, and the ODE theory is dropped from the paper.
+- C2. Agreement between the loop's end state and the flow's end state rises monotonically as γ falls (1 → 0.5 → 0.25 → 0.1), and exceeds 90% at γ = 0.1.
+- C3. On the overthinking TRM checkpoint, puzzles where the γ = 1 run and the flow disagree are over-represented among the puzzles that carry-last loses between steps 16 and 256 (odds ratio > 2, Fisher exact p < 0.05).
+- C4. The residual decreases monotonically along at least 90% of flow trajectories for EqR (trained with damping and noise). The overthinking TRM checkpoint has a lower share than the control checkpoint.
+
+**Outputs.** `results/looped_basins/` with the script, the per-model agreement tables and a README listing every prediction with its outcome.
+
+## Part D: a better filter for the loop (Koopman / Kalman), against strong baselines
+
+**Why.** The draft's §5.3 and §12 propose, untested, a filter "with a precision per channel or a gain that propagates uncertainty like a Kalman filter". InfiLoop's filter changes how many solutions are found (39% → 78% across decays, Fig. 7b). A better filter is the practical improvement the paper lacks.
+
+Koopman theory is valid here: unlike the fSDE work, the loop's state evolves under a deterministic Markov map, and the Koopman spectrum at a fixed point contains the Jacobian eigenvalues the draft measures.
+
+**The bar.** Koopman/DMD extrapolation of fixed-point iterates is closely related to Krylov acceleration (DMD ≈ Arnoldi; Anderson acceleration ≈ GMRES). A Koopman filter must therefore beat **Anderson acceleration** at matched block evaluations, or it is a known accelerator under a new name.
+
+**Variants** (all applied at inference to existing checkpoints; compute is counted in block evaluations):
+
+| ID | Update rule | Notes |
+| --- | --- | --- |
+| D0 | carry-last (γ = 1) | baseline |
+| D1 | constant damping at 0.9 × the per-puzzle limit | the draft's own rule (§11) |
+| D2 | InfiLoop's learned EMA filter at the trained decay | InfiLoop only |
+| D3 | **Anderson acceleration**, memory 5, mixing 1 (also 0.5) | the key baseline |
+| D4 | windowed linear DMD / minimal-polynomial extrapolation, every 8 steps, in the readout subspace plus the top 32 PCA directions of recent iterates; carry-last on the rest | Koopman with linear observables |
+| D5 | **kernel Koopman–Kalman filter** (see below) | the candidate method |
+| D6 | **per-channel Kalman gain**: Γ_c = P_c / (P_c + R_c), with R_c the running innovation variance of channel c and P_c propagated as in a local-level model | the draft's §5.3 suggestion |
+
+**D5 in detail.**
+
+1. **Per-position features:** project each position's state onto the readout subspace plus the top k = 32 PCA directions of recent iterates. Lift with Nyström RBF features on m = 128 landmarks, maintained online by k-center selection; reuse `OnlineKCenter` from `pomdp-koopman-control/src/sskf/streaming_sig_kkf.py`, which is generic despite its name.
+2. **Operator:** learn the lifted operator z_{t+1} ≈ K z_t online by recursive least squares with forgetting, pooling all positions of the current puzzle. Reuse `OnlineKoopman` from `rkhs-kronic/src/online_koopman.py`.
+3. **Kalman fusion:** predict ẑ = K z, observe the lifted candidate φ(f(h)), fuse them with the RLS covariance as the prior and the innovation variance as R (the heteroskedastic pattern of `pomdp-koopman-control/src/sskf/heteroskedastic_kalman_v.py`), and decode back to the projected state with a ridge decoder.
+4. **Unmodelled directions:** take the candidate unchanged (carry-last) outside the projected subspace.
+
+**Metrics.**
+
+- Share solved at budgets of 16, 32, 64 and 256 block evaluations.
+- Block evaluations needed to settle (relative residual below 10⁻³).
+- On the overthinking TRM checkpoint, answers lost between budgets 16 and 256.
+- Hold tests at solutions: perturb by 10⁻⁴, iterate 2,000 steps under each filter, and record whether the state returns.
+
+**Registered predictions.**
+
+- D-1. Anderson (D3) cuts the block evaluations to settle by at least 30% against carry-last on held solutions of TRM-control, HRM and EqR, and lowers final accuracy by no more than 1 point.
+- D-2. On FPRM (Sudoku) and SFPRM (Mini-ARC), whose solutions carry-last cannot hold, D3 or D4 settles at least 80% of the solutions the model's own adaptive solver settles, at no more than 50% of its block evaluations.
+- D-3. This prediction is deliberately sceptical. On the overthinking TRM checkpoint, no variant among D3–D6 recovers more than half of the answers carry-last loses between budgets 16 and 256: those losses are search failures far from fixed points (§10).
+- D-4. This prediction carries the novelty. The kernel Koopman–Kalman filter (D5) beats Anderson (D3) in share solved at a budget of 32 block evaluations on at least 2 of the 5 Mini-ARC models, by at least 2 points. If it fails, the Koopman framing reduces to acceleration and is reported as such.
+- D-5. This needs InfiLoop weights. On InfiLoop, the per-channel Kalman gain (D6) raises the share solved after the trained depth by at least 2 points over the scalar learned filter (D2) at the trained decay.
+- D-6. This extends the gain-limit theory to matrix gains. For D6, the linearised loop at a fixed point is (I − Γ) + Γ J_f with Γ diagonal. Its spectral radius, estimated by JVP power iteration as in the draft's appendix B, predicts the outcome of the hold test in at least 95% of solutions.
+
+**Stage 2** (only if D-4 or D-5 holds): train InfiLoop with the winning filter inside the loop, about 26 GPU-hours per run, with two seeds, and compare against the released recipe.
+
+**Outputs.** `results/looped_filters/` with the filter implementations, the per-model tables and a README listing every prediction with its outcome.
